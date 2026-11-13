@@ -1,0 +1,47 @@
+:root {
+  /* 普鲁士蓝 + 米白坐标网格（低饱和 oklch，禁用青蓝霓虹/渐变文字） */
+  --ink-900: oklch(0.19 0.042 254);
+  --plate-900: oklch(0.235 0.052 254);
+  --plate-850: oklch(0.268 0.05 253);
+  --plate-800: oklch(0.302 0.048 252);
+  --plate-700: oklch(0.372 0.044 251);
+  --plate-600: oklch(0.45 0.04 250);
+
+  --grid: oklch(0.88 0.026 88 / 0.13);
+  --grid-strong: oklch(0.9 0.03 88 / 0.26);
+  --rule: oklch(0.88 0.03 88 / 0.2);
+  --rule-strong: oklch(0.9 0.035 88 / 0.4);
+
+  --cream: oklch(0.935 0.022 88);
+  --cream-dim: oklch(0.82 0.02 88);
+  --cream-mute: oklch(0.71 0.018 250);
+
+  --rust: oklch(0.71 0.115 45);
+  --rust-dim: oklch(0.62 0.1 44);
+  --sand: oklch(0.84 0.055 86);
+  --ok: oklch(0.75 0.09 155);
+  --warn: oklch(0.81 0.11 82);
+  --bad: oklch(0.67 0.14 27);
+  --info: oklch(0.76 0.06 232);
+
+  --font-sans: 'Archivo', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  --font-mono: 'Space Mono', 'Noto Sans Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  --step--1: clamp(0.72rem, 0.7rem + 0.1vw, 0.78rem);
+  --step-0: clamp(0.86rem, 0.82rem + 0.18vw, 0.95rem);
+  --step-1: clamp(1rem, 0.94rem + 0.3vw, 1.16rem);
+  --step-2: clamp(1.24rem, 1.1rem + 0.6vw, 1.55rem);
+  --step-3: clamp(1.6rem, 1.35rem + 1.1vw, 2.2rem);
+  --step-4: clamp(2.1rem, 1.6rem + 2vw, 3.2rem);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 18px;
+  --space-5: 26px;
+  --space-6: 38px;
+  --space-7: 56px;
+
+  --ease-out: cubic-bezier(0.16, 0.84, 0.24, 1);
+  --rail: 212px;
+}

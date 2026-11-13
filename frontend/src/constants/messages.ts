@@ -1,0 +1,5 @@
+export const MSG_EMPTY_QUERY = '当前筛选条件下没有查询记录。试着把状态切回「全部」，或先导入 60 条演示查询日志。'
+export const MSG_EMPTY_REWRITE = '还没有改写建议。先跑一次估算批次，再对裁剪失效的查询生成改写。'
+export const MSG_EMPTY_TABLE = '没有匹配的表元数据。'
+export const MSG_LOADING = '正在解析 SQL 与分区元数据…'
+export const MSG_FORBIDDEN = '当前角色没有这个操作权限（后端返回 403）'
