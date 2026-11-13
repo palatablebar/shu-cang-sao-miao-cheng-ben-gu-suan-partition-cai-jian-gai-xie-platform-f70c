@@ -1,10 +1,31 @@
 """RewriteSuggestion schemas."""
 from pydantic import BaseModel
 
+from src.schemas.query import ReconciliationOut, TableAnalysisOut
+
 
 class RewriteGenerateRequest(BaseModel):
     query_id: int | None = None
     limit: int = 12
+
+
+class TableRewriteChangeOut(BaseModel):
+    """改写前后逐表对照：扫描字节 / 命中分区 / 裁剪原因。"""
+
+    table_name: str
+    alias: str = ""
+    after_alias: str = ""
+    before_scan_bytes: int = 0
+    after_scan_bytes: int = 0
+    before_hit_partition_count: int = 0
+    after_hit_partition_count: int = 0
+    before_total_partition_count: int = 0
+    after_total_partition_count: int = 0
+    before_prunable: bool = False
+    after_prunable: bool = False
+    before_blocked_reason: str = "none"
+    after_blocked_reason: str = "none"
+    changed: bool = False
 
 
 class RewriteOut(BaseModel):
@@ -25,6 +46,8 @@ class RewriteOut(BaseModel):
     score: float
     status: str
     rationale: str
+    table_count: int = 0
+    table_changes: list[TableRewriteChangeOut] = []
 
 
 class RewriteDetail(RewriteOut):
@@ -36,6 +59,12 @@ class RewriteDetail(RewriteOut):
     after_prunable: bool
     after_hit_partition_count: int
     after_total_partition_count: int
+    before_tables: list[TableAnalysisOut] = []
+    after_tables: list[TableAnalysisOut] = []
+    before_reconciliation: ReconciliationOut | None = None
+    after_reconciliation: ReconciliationOut | None = None
+    qualified: bool = True
+    rejection_reason: str = ""
 
 
 class RewriteReevaluateOut(BaseModel):
@@ -50,3 +79,4 @@ class RewriteReevaluateOut(BaseModel):
     after_hit_partition_count: int
     after_total_partition_count: int
     rationale: str
+    table_changes: list[TableRewriteChangeOut] = []

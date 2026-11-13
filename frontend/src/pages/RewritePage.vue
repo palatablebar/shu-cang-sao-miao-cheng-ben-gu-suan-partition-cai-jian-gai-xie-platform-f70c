@@ -12,6 +12,7 @@ import EmptyState from '../components/common/EmptyState.vue'
 import ErrorNotice from '../components/common/ErrorNotice.vue'
 import MonoMetric from '../components/common/MonoMetric.vue'
 import StatusStamp from '../components/common/StatusStamp.vue'
+import TableRewriteCompare from '../components/common/TableRewriteCompare.vue'
 import { ANTI_PATTERN_LABEL, RISK_LABEL, SUGGESTION_STATUS_LABEL } from '../constants/enums'
 import { MSG_EMPTY_REWRITE } from '../constants/messages'
 import { cny, gibLabel, pct, ratio, scoreLabel } from '../utils/format'
@@ -173,7 +174,12 @@ onMounted(load)
           <div class="compare">
             <BlueprintPanel label="改写前 / BEFORE">
               <pre class="sql-block sql-block--before">{{ detail.original_sql }}</pre>
-              <p class="hint mono" style="margin: 6px 0 0">{{ gibLabel(detail.before_scan_bytes) }} · {{ detail.before_rationale }}</p>
+              <p class="hint mono" style="margin: 6px 0 0">
+                {{ gibLabel(detail.before_scan_bytes) }} ·
+                {{ detail.before_tables.length }} 张表 ·
+                {{ detail.before_tables.filter((t) => t.prunable).length }} 张可裁剪 ·
+                {{ detail.before_rationale }}
+              </p>
             </BlueprintPanel>
             <BlueprintPanel label="改写后 / AFTER">
               <pre class="sql-block">{{ detail.rewritten_sql }}</pre>
@@ -184,7 +190,43 @@ onMounted(load)
             </BlueprintPanel>
           </div>
 
+          <BlueprintPanel label="逐表前后对照 / PER-TABLE BREAKDOWN">
+            <p class="hint" style="margin: 0 0 10px">
+              展开任意一张表可看改写前后的扫描字节、命中分区与裁剪原因；底部对账行与上方总量一致。
+            </p>
+            <TableRewriteCompare
+              v-if="detail.table_changes.length"
+              :changes="detail.table_changes"
+              :before-tables="detail.before_tables"
+              :after-tables="detail.after_tables"
+              :before-total="detail.before_scan_bytes"
+              :after-total="detail.after_scan_bytes"
+              default-open
+            />
+            <p v-else class="hint">该建议没有逐表拆解数据。</p>
+            <div v-if="detail.before_reconciliation" class="recon">
+              <span class="mono hint">改写前对账</span>
+              <span class="hint">
+                表级 {{ gibLabel(detail.before_reconciliation.table_scan_sum_bytes) }} vs 查询
+                {{ gibLabel(detail.before_reconciliation.query_scan_bytes) }} ·
+                {{ detail.before_reconciliation.balanced ? '一致' : `差额 ${gibLabel(Math.abs(detail.before_reconciliation.delta_bytes))}` }}
+              </span>
+            </div>
+            <div v-if="detail.after_reconciliation" class="recon">
+              <span class="mono hint">改写后对账</span>
+              <span class="hint">
+                表级 {{ gibLabel(detail.after_reconciliation.table_scan_sum_bytes) }} vs 查询
+                {{ gibLabel(detail.after_reconciliation.query_scan_bytes) }} ·
+                {{ detail.after_reconciliation.balanced ? '一致' : `差额 ${gibLabel(Math.abs(detail.after_reconciliation.delta_bytes))}` }}
+              </span>
+            </div>
+          </BlueprintPanel>
+
           <BlueprintPanel label="等价改写动作 / FIXES">
+            <div v-if="!detail.qualified" class="notice" style="margin-bottom: var(--space-3)">
+              <span class="mono">未生成</span>
+              <span>{{ detail.rejection_reason || '至少一张表无法确定等价改写，整条查询不生成建议。' }}</span>
+            </div>
             <ol class="fixes">
               <li v-for="fix in detail.fixes" :key="fix">{{ fix }}</li>
             </ol>
@@ -367,6 +409,17 @@ tbody tr {
 .fixes li::marker {
   color: var(--rust);
   font-family: var(--font-mono);
+}
+.recon {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 6px;
+}
+.recon .mono {
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
 }
 .metrics {
   display: grid;

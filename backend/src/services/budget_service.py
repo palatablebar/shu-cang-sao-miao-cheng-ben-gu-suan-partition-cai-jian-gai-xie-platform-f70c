@@ -1,5 +1,5 @@
 """BudgetPolicy service + 预算总览（月账单 vs 预算阈值）。"""
-from sqlalchemy import Integer, case, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.config.settings import settings
@@ -136,29 +136,34 @@ def overview(db: Session) -> BudgetOverview:
             total_scan / GIB * unit_cost, settings.MONTHLY_QUERY_DAYS, settings.QUERY_VOLUME_SCALE
         )
 
-    rows = db.execute(
-        select(
-            QueryLog.target_table,
-            func.coalesce(func.sum(QueryLog.scan_bytes), 0),
-            func.count(QueryLog.id),
-            func.coalesce(
-                func.sum(case((QueryLog.prunable.is_(False), 1), else_=0)), 0
-            ).cast(Integer),
-        )
-        .where(QueryLog.target_table.is_not(None))
-        .group_by(QueryLog.target_table)
-        .order_by(func.coalesce(func.sum(QueryLog.scan_bytes), 0).desc())
-    ).all()
+    # 按表扫描分布必须逐表累加：多表查询只按 target_table 汇总会把第二张表算丢。
+    # 先用 JSONB 表级拆解（query_log.tables[*].scan_bytes），老数据没有拆解时回退到 target_table。
     layers = {table.table_name: table.layer for table in db.scalars(select(TableMeta))}
+    aggregates: dict[str, dict] = {}
+    for query in db.scalars(select(QueryLog).where(QueryLog.parse_status == "parsed")):
+        entries = [(row.get("table_name"), int(row.get("scan_bytes") or 0), bool(row.get("prunable")))
+                   for row in (query.tables or []) if isinstance(row, dict)]
+        if not entries:
+            if not query.target_table:
+                continue
+            entries = [(query.target_table, int(query.scan_bytes or 0), bool(query.prunable))]
+        for table_name, scan_bytes, prunable in entries:
+            aggregate = aggregates.setdefault(
+                table_name, {"scan_bytes": 0, "query_count": 0, "blocked_count": 0}
+            )
+            aggregate["scan_bytes"] += scan_bytes
+            aggregate["query_count"] += 1
+            if not prunable:
+                aggregate["blocked_count"] += 1
     tables = [
         TableScanRow(
-            table_name=row[0],
-            layer=layers.get(row[0], "DWD"),
-            scan_bytes=int(row[1] or 0),
-            query_count=int(row[2] or 0),
-            blocked_count=int(row[3] or 0),
+            table_name=table_name,
+            layer=layers.get(table_name, "DWD"),
+            scan_bytes=aggregate["scan_bytes"],
+            query_count=aggregate["query_count"],
+            blocked_count=aggregate["blocked_count"],
         )
-        for row in rows
+        for table_name, aggregate in sorted(aggregates.items(), key=lambda item: -item[1]["scan_bytes"])
     ]
     saving = int(
         db.scalar(

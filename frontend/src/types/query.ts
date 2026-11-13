@@ -16,6 +16,9 @@ export interface QueryListItem {
   hit_partition_count: number
   total_partition_count: number
   col_ratio: number
+  table_count: number
+  tables: TableAnalysis[]
+  reconciliation: Reconciliation | null
 }
 
 export interface Predicate {
@@ -25,6 +28,40 @@ export interface Predicate {
   usable: boolean
   reason: string
   wrapper_kind: string | null
+  table?: string | null
+  table_alias?: string | null
+}
+
+export interface TableAnalysis {
+  table_name: string
+  qualified_name: string
+  alias: string
+  status: 'analyzed' | 'missing_table' | 'not_partitioned'
+  partition_key: string | null
+  prunable: boolean
+  blocked_reason: string
+  blocked_expression: string | null
+  predicates: Predicate[]
+  hit_partitions: string[]
+  hit_partition_count: number
+  total_partition_count: number
+  hit_bytes: number
+  col_ratio: number
+  projected_columns: string[]
+  referenced_columns: string[]
+  has_star: boolean
+  scan_bytes: number
+  full_scan_bytes: number
+  counted_in_total: boolean
+  rationale: string
+}
+
+export interface Reconciliation {
+  query_scan_bytes: number
+  table_scan_sum_bytes: number
+  delta_bytes: number
+  balanced: boolean
+  missing_table_count: number
 }
 
 export interface QueryDetail extends QueryListItem {
@@ -39,6 +76,10 @@ export interface QueryDetail extends QueryListItem {
   full_scan_bytes: number
   rationale: string
   suggestion_count: number
+  table_count: number
+  tables: TableAnalysis[]
+  reconciliation: Reconciliation | null
+  table_scan_sum_bytes: number
 }
 
 export interface QueryImportResult {

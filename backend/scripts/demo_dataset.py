@@ -308,11 +308,12 @@ def _pick(dates: list[str], index: int) -> str:
 
 
 def build_queries(tables: list[dict] | None = None) -> list[dict]:
-    """Deterministic 60-row query log: 18 blocked (10 wrapped / 8 implicit cast... ) + 42 prunable.
+    """Deterministic 60-row query log: 18 blocked (6 wrapped / 8 implicit cast / 4 missing) + 42 prunable.
 
     裁剪失效构成（与 batch-plan 对齐）：
         6 条 分区列函数包裹、8 条 隐式类型转换、4 条 缺分区谓词 = 18 条
-    其中 QL-0007（dwd_order_detail + to_char 包裹 + SELECT *）是全量扫描 Top1。
+    其中 QL-0001（dwd_order_detail + dwd_payment_flow 联合查询，明细 to_char 包裹）
+    是单条扫描 Top1（12.40 GiB / 次），用来验证「多表逐表判定 + 表级拆解对账」。
     """
     table_map = {t["table_name"]: t for t in (tables or build_tables())}
     dates = {name: [p["dt"] for p in t["partitions"]] for name, t in table_map.items()}
@@ -350,11 +351,18 @@ def build_queries(tables: list[dict] | None = None) -> list[dict]:
     sales = "ads_sales_daily"
     member = "ads_member_value"
 
-    # --- 1. Top1：分区列函数包裹 + SELECT *（dwd_order_detail 全量扫描） ---
+    # --- 1. Top1：分区列函数包裹（dwd_order_detail 全量扫描） ---
+    # 订单归因同时扫订单明细与支付流水：明细谓词被 to_char 包裹（裁剪失效），
+    # 支付流水叠加隐式整型日期（同样失效）—— 用于验证「多表逐表判定 + 表级拆解对账 +
+    # 任一张表无法等价改写就不生成建议」。
     add(
         dd,
-        "双 11 成交明细全量导出（运营临时取数）",
-        f"SELECT * FROM dwd_order_detail WHERE to_char(dt, 'YYYY-MM-DD') = '{_pick(dates[dd], 29)}'",
+        "双 11 成交明细与支付流水归因（明细谓词失效）",
+        f"SELECT d.*, p.pay_id, p.pay_channel\n"
+        f"FROM dwd_order_detail d\n"
+        f"JOIN dwd_payment_flow p ON d.order_id = p.order_id\n"
+        f"WHERE to_char(d.dt, 'YYYY-MM-DD') = '{_pick(dates[dd], 29)}'\n"
+        f"  AND p.dt = {_pick(dates[pay], 11).replace('-', '')}",
         "adhoc",
         ENGINEER,
         29,

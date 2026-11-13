@@ -34,6 +34,7 @@ export interface TableListItem {
   suggested_columns: string[]
   query_count: number
   blocked_query_count: number
+  last_analyzed_dt?: string | null
 }
 
 export interface TableDetail extends TableListItem {

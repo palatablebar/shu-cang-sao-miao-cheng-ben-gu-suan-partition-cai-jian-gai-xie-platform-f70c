@@ -172,8 +172,20 @@ onMounted(loadAll)
                   <p class="title">{{ item.title }}</p>
                   <p class="meta">
                     <span class="mono">{{ item.target_table || '—' }}</span>
+                    <span v-if="item.table_count > 1" class="mono"> +{{ item.table_count - 1 }} 表</span>
                     · {{ item.source }} · {{ item.submitted_by }}
                     <span v-if="item.is_scheduled"> · 调度</span>
+                  </p>
+                  <p v-if="item.table_count > 1 && item.tables.length" class="table-chips">
+                    <span
+                      v-for="table in item.tables"
+                      :key="table.alias || table.table_name"
+                      class="chip mono"
+                      :class="{ 'chip--bad': !table.prunable && table.status === 'analyzed' }"
+                      :title="`${table.table_name} · 命中 ${table.hit_partition_count}/${table.total_partition_count} · ${BLOCKED_REASON_LABEL[table.blocked_reason] || table.blocked_reason}`"
+                    >
+                      {{ table.table_name }} {{ gibLabel(table.scan_bytes) }}
+                    </span>
                   </p>
                 </td>
                 <td>
@@ -181,6 +193,9 @@ onMounted(loadAll)
                     :label="BLOCKED_REASON_SHORT[item.blocked_reason] || item.blocked_reason"
                     :level="item.prunable ? 'prunable' : 'blocked'"
                   />
+                  <p v-if="item.table_count > 1" class="hint" style="margin: 4px 0 0">
+                    {{ item.tables.filter((t) => t.prunable).length }}/{{ item.table_count }} 表可裁剪
+                  </p>
                 </td>
                 <td class="num mono">{{ item.hit_partition_count }}/{{ item.total_partition_count }}</td>
                 <td class="num">
@@ -335,6 +350,23 @@ onMounted(loadAll)
   margin: 3px 0 0;
   font-size: 0.68rem;
   color: var(--cream-mute);
+}
+.table-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 5px 0 0;
+}
+.chip {
+  border: 1px solid var(--rule);
+  padding: 0 6px;
+  font-size: 0.64rem;
+  color: var(--cream-dim);
+  white-space: nowrap;
+}
+.chip--bad {
+  border-color: oklch(0.67 0.14 27 / 0.6);
+  color: var(--bad);
 }
 .scan {
   display: block;

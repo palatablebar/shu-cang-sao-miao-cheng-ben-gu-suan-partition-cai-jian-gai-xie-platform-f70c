@@ -40,6 +40,10 @@ class QueryLog(Base, TimestampMixin):
     scan_cost_cny: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     full_scan_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # 多表拆解：逐表扫描字节 / 命中分区 / 裁剪原因 + 与查询总量的对账结果。
+    table_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    tables: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    reconciliation: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     suggestions = relationship("RewriteSuggestion", back_populates="query")

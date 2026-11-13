@@ -53,6 +53,7 @@ def _apply(suggestion: RewriteSuggestion, query: QueryLog, result: RewriteResult
     suggestion.score = result.score
     suggestion.rewritten_sql = result.rewritten_sql
     suggestion.rationale = result.rationale
+    suggestion.table_changes = result.table_changes
 
 
 def get_suggestion(db: Session, suggestion_id: int) -> RewriteSuggestion:
@@ -77,6 +78,12 @@ def detail(db: Session, suggestion_id: int) -> RewriteDetail:
         "after_prunable": bool(result.after and result.after.prunable),
         "after_hit_partition_count": result.after.hit_partition_count if result.after else 0,
         "after_total_partition_count": result.after.total_partition_count if result.after else 0,
+        "before_tables": result.before.tables if result.before else [],
+        "after_tables": result.after.tables if result.after else [],
+        "before_reconciliation": result.before.reconciliation if result.before else None,
+        "after_reconciliation": result.after.reconciliation if result.after else None,
+        "qualified": bool(result.after) and bool(result.rewritten_sql),
+        "rejection_reason": result.note if not result.rewritable else "",
     }
     return serializers.rewrite_detail(suggestion, extra)
 
@@ -194,6 +201,7 @@ def reevaluate(db: Session, suggestion_id: int) -> RewriteReevaluateOut:
         after_hit_partition_count=result.after.hit_partition_count if result.after else 0,
         after_total_partition_count=result.after.total_partition_count if result.after else 0,
         rationale=result.rationale,
+        table_changes=result.table_changes,
     )
 
 

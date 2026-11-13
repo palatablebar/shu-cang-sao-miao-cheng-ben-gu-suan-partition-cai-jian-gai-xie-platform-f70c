@@ -26,6 +26,8 @@ class EstimateSummary:
     top_query_id: int | None = None
     top_scan_bytes: int = 0
     rows: list[EstimateRow] = field(default_factory=list)
+    # 按表汇总：多表查询会把扫描量分别计入每一张表，故表级合计可能大于查询合计（这是口径，不是误差）。
+    tables: dict[str, dict] = field(default_factory=dict)
 
 
 def estimate_queries(
@@ -49,6 +51,14 @@ def estimate_queries(
         else:
             summary.blocked_count += 1
         summary.total_scan_bytes += analysis.scan_bytes
+        for row in analysis.tables:
+            table = summary.tables.setdefault(
+                row["table_name"],
+                {"table_name": row["table_name"], "query_count": 0, "scan_bytes": 0, "full_scan_bytes": 0},
+            )
+            table["query_count"] += 1
+            table["scan_bytes"] += int(row["scan_bytes"])
+            table["full_scan_bytes"] += int(row["full_scan_bytes"])
         if analysis.scan_bytes > summary.top_scan_bytes:
             summary.top_scan_bytes = analysis.scan_bytes
             summary.top_query_id = query_id

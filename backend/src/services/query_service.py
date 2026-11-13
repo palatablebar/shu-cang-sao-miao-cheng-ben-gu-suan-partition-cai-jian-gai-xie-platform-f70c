@@ -54,6 +54,9 @@ def _apply_analysis(query: QueryLog, analysis: QueryAnalysis, cost_per_gib: floa
     query.scan_cost_cny = round(analysis.scan_bytes / (1024 ** 3) * cost_per_gib, 6)
     query.full_scan_bytes = analysis.full_scan_bytes
     query.rationale = analysis.rationale
+    query.table_count = analysis.table_count
+    query.tables = analysis.tables
+    query.reconciliation = analysis.reconciliation
     query.analyzed_at = datetime.now(timezone.utc)
 
 
@@ -66,9 +69,15 @@ def analyze_and_store(db: Session, query: QueryLog, catalog=None) -> QueryAnalys
 
 def analyze_one(db: Session, query_id: int) -> QueryDetail:
     query = get_query(db, query_id)
-    analyze_and_store(db, query)
+    analysis = analyze_and_store(db, query)
     db.commit()
-    return detail(db, query_id)
+    return serializers.query_detail(query, len(query.suggestions or []), analysis=analysis)
+
+
+def detail(db: Session, query_id: int) -> QueryDetail:
+    query = get_query(db, query_id)
+    suggestion_count = len(query.suggestions) if query.suggestions is not None else 0
+    return serializers.query_detail(query, suggestion_count)
 
 
 def import_pack(db: Session) -> QueryImportResult:

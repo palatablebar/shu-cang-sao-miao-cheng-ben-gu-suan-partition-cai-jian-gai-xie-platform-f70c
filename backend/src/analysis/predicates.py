@@ -6,6 +6,9 @@
       / ``coalesce(dt,..)``）= 不可裁剪
     * 字面量类型与分区列类型不一致（date_str 列比整型字面量）= 隐式转换，不可裁剪
     * 完全没有分区谓词 = 不可裁剪
+
+多表口径下的归属由 ``sql_analyzer.attribute_predicates`` 完成：逐 WHERE 合取项按列限定符 /
+元数据归属到表；跨表或无限定符同名分区列判为 ``ambiguous_predicate``，不参与裁剪。
 """
 from __future__ import annotations
 
@@ -30,6 +33,7 @@ FLIP = {"=": "=", "!=": "!=", ">": "<", ">=": "<=", "<": ">", "<=": ">="}
 BLOCK_FUNCTION = "function_wrapped"
 BLOCK_CAST = "implicit_cast"
 BLOCK_EXPRESSION = "expression_not_usable"
+BLOCK_AMBIGUOUS = "ambiguous_predicate"   # 多表同名列，无法归属到某一张表的分区键
 
 
 @dataclass
@@ -330,6 +334,8 @@ def _merge_parts(
         False,
         first.reason if first else BLOCK_EXPRESSION,
         wrapper_kind=first.wrapper_kind if first else None,
+        # 保留各分支的字面量，改写器才能把 `dt = 20261110 OR dt = 20261111` 逐分支还原。
+        values=[value for part in parts if part and part.values for value in part.values],
     )
 
 

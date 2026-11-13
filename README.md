@@ -9,9 +9,9 @@
 - **三个痛点**：① 单条查询扫描量不可见；② 分区谓词写错导致裁剪失效无人告警；③ 改写收益无法量化、无法排序。
 - **上下游**：上游 = 查询日志 + 表/分区/列元数据（分区边界、行数、字节）→ 本系统替代「人工看执行计划 + 经验改写」→ 下游 = 数据开发改 SQL、平台组报预算。
 - **一天的工作剧本**（seed 数据与之一致）：
-  1. 08:40 沈知远打开「查询成本排行」，看到昨日 60 条查询合计扫描量与 Top1（`dwd_order_detail` 双 11 全量导出，12.40 GiB/次）。
-  2. 08:50 点开 Top1 的 SQL 解析详情：谓词是 `to_char(dt,'YYYY-MM-DD') = '2026-11-11'`，被判定「分区列被函数包裹」，30 个分区全部命中。
-  3. 09:05 对这条查询生成改写建议 `RW-QL-0001`：`dt = '2026-11-11'` + 建议投影列，节省 98.8%。
+  1. 08:40 沈知远打开「查询成本排行」，看到昨日 60 条查询合计扫描量与 Top1（`dwd_order_detail` ⋈ `dwd_payment_flow` 订单归因，13.33 GiB/次）。
+  2. 08:50 点开 Top1 的 SQL 解析详情：展开表级拆解，看到明细表谓词 `to_char(d.dt,'YYYY-MM-DD') = ...` 被判定「分区列被函数包裹」、30 个分区全部命中；支付流水表 `p.dt = 20261212` 被判定「隐式类型转换」、12 个分区全部命中，两张表的扫描量与查询总量对账一致。
+  3. 09:05 对这条查询生成改写建议 `RW-QL-0001`：两张表的谓词都改成裸列比较、明细表 `d.*` 换成建议投影列，节省 98.3%。
   4. 09:20 重估并把建议标记为采纳，导出 12 行优化清单 CSV 发给数据开发。
   5. 09:40 陈肃按清单改掉 8 条隐式类型转换（`dt = 20261112` → `dt = '2026-11-12'`）。
   6. 10:10 周娅（财务 BP，只读）打开预算页看子集 1,800 元预算占用（折算约 81%），无法触发估算/改写（后端 403）。
@@ -22,8 +22,8 @@
 | 模块 | 说明 |
 |---|---|
 | 查询成本排行 | 按扫描字节/费用/耗时排行，标注「可裁剪 / 裁剪失效 + 原因」，支持来源、表、关键字过滤 |
-| SQL 解析详情 | sqlglot 解析结果：分区谓词逐条判定、命中分区、列裁剪比例、扫描量拆解、可解释结论 |
-| 改写建议与前后对比 | 反模式识别 → 等价改写 SQL → 重估节省 → 按 `saving × confidence ÷ risk_weight` 排序，可采纳/导出 |
+| SQL 解析详情 | sqlglot 解析结果：按表列出扫描字节、命中分区、裁剪原因与谓词判定，表级明细与查询总量对账，可展开逐表拆解 |
+| 改写建议与前后对比 | 反模式识别 → 逐表等价改写 SQL → 重估节省 → 按 `saving × confidence ÷ risk_weight` 排序；任一张表无法确定等价即不生成建议；前后逐表对照可展开 |
 | 表与分区元数据 | 6 张表 / 90 个日分区 / 列字节统计 / 建议投影列；admin 可维护负责人与说明 |
 | 预算策略与批次 | 子集月预算 1,800 元（全仓 1.8 万的 1/10）与 warn/critical 阈值、按表扫描分布、估算批次（Celery 异步）、审计流水（admin） |
 
@@ -32,24 +32,36 @@
 ### 算法 1：扫描量估算与裁剪判定（`backend/src/analysis/sql_analyzer.py`、`predicates.py`、`estimator.py`）
 
 ```
-col_ratio  = Σ_{c ∈ 引用列且 c 不是分区键} bytes_c / Σ_{c ∈ 数据列} bytes_c
-scan_bytes = Σ_{p ∈ P_hit} bytes_p × col_ratio
-P_hit      = { p | 分区谓词在 p.dt 上求值为真 }
+col_ratio(t)  = Σ_{c ∈ 引用列(t)且 c 不是分区键} bytes_c / Σ_{c ∈ 数据列(t)} bytes_c
+scan_bytes(t) = Σ_{p ∈ P_hit(t)} bytes_p × col_ratio(t)
+scan_bytes    = Σ_{t ∈ 查询引用表} scan_bytes(t)
+P_hit(t)      = { p | 分区谓词在 p.dt 上求值为真 }，裁剪失效时 P_hit(t) = 全部分区
 ```
+
+**多表口径（JOIN / 逗号连接）**：一条查询可以同时扫多张表（订单归因 = 明细 ⋈ 支付流水）。
+算法逐表独立解出 `scan_bytes(t)`，再求和成查询总量，并同时返回 `tables[]`（每张表的命中分区、
+裁剪原因、列裁剪比例）与 `reconciliation`（表级明细之和 vs 查询总量，必须相等）。
+任一表不在元数据目录 → 整条查询 `missing_table`（扫描量记 0，不静默部分估算），但仍列出已解析表的明细。
 
 - 裸列比较（`dt = '2026-11-12'`、`BETWEEN`、`IN`、比较运算）= **可裁剪**；
 - 分区列被函数/表达式包裹（`to_char(dt,..)`、`date(dt)`、`dt::date`、`substr(dt,1,7)`、`trunc(dt)`）= **不可裁剪**（`function_wrapped`）；
 - 字面量类型与分区列不一致（date_str 列比整型 `20261112`）= 隐式转换（`implicit_cast`），**不可裁剪**；
 - 完全没有分区谓词 = `missing_predicate`，**不可裁剪**；
 - `SELECT *` 时 `col_ratio = 1.0`；纯聚合按最小列比例 0.03 计。
-- 失败态：`unparsed`（sqlglot 解析失败）、`missing_table`（表不在元数据目录）都会显式返回，绝不静默记 0。
+- 无限定符的 `dt` 同时命中多张表的分区键 → 归属不明（`ambiguous_predicate`），不用于裁剪（保守全扫）；
+- 子查询 / CTE / 集合运算 → `unparsed`（超出可拆解范围，显式失败，不猜）；
+- 失败态：`unparsed`（sqlglot 解析失败 / 查询形态不可拆解）、`missing_table`（表不在元数据目录）都会显式返回，绝不静默记 0。
 
 ### 算法 2：改写建议与收益排序（`backend/src/analysis/rewriter.py`、`scoring.py`）
 
 - 反模式：`partition_function_wrap` / `partition_implicit_cast` / `select_star` / `missing_partition_predicate`；
-- 改写：裸列比较、同类型字面量、按表元数据建议投影列替换 `*`、补最近 7 天时间窗口；
+- 改写：裸列比较（保留表限定符 `p.dt`）、同类型字面量、按表元数据建议投影列替换 `*`、补最近 7 天时间窗口；
+- **逐表处理**：联合查询里每张表各自改写自己的谓词与投影；**只要有一张表无法确定等价改写
+  （字面量无法还原成日期、建议投影列为空、多表共用的未限定 `*` 无法拆分、OR 里混入非分区条件），
+  整条查询就不生成建议**——不允许「改一半、省一半」。
 - 风险与置信度：低风险 1.0/0.95、中风险 1.6/0.90、高风险 2.4/0.62（同一查询命中多类取最严 + 最低置信度）；
-- **改写后扫描量不是估算系数**，而是把改写 SQL 重新喂给算法 1 求解，`saving = before − after`，`score = saving_bytes × confidence ÷ risk_weight`。
+- **改写后扫描量不是估算系数**，而是把改写 SQL 重新喂给算法 1 求解，`saving = before − after`，`score = saving_bytes × confidence ÷ risk_weight`；
+- 建议同时保存 `table_changes[]`：逐表给出改写前后的扫描字节、命中分区数、裁剪原因，页面可展开对照。
 
 ## 4. 快速启动
 
@@ -98,6 +110,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 backend/
   src/{config,constants,models,schemas,analysis,services,controllers,routes,middlewares,utils,tasks}
   scripts/{seed_demo.py,demo_dataset.py}
+  tests/test_multitable_analysis.py   # 离线回归：逐表拆解 / 对账 / 逐表改写等价性
   migrations/0001_initial.sql
 worker/{Dockerfile,entrypoint.sh,healthy.py}
 frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants,styles}
@@ -134,8 +147,8 @@ docker-compose.yml  .env.example  README.md
 | 枚举 | 后端 | 前端 |
 |---|---|---|
 | `Role` (admin/engineer/viewer) | `backend/src/constants/enums.py`、`middlewares/rbac.py`、`models/user.py`、`scripts/demo_dataset.py` | `frontend/src/types/user.ts`、`constants/enums.ts`(ROLE_LABEL)、`stores/authStore.ts` |
-| `PruneBlockReason` | `constants/enums.py`、`analysis/predicates.py`、`analysis/sql_analyzer.py`、`models/query_log.py` | `constants/enums.ts`(BLOCKED_REASON_LABEL)、`pages/QueryCostPage.vue`、`pages/QueryDetailPage.vue` |
-| `AntiPattern` | `constants/enums.py`、`analysis/rewriter.py`、`analysis/scoring.py` | `constants/enums.ts`(ANTI_PATTERN_LABEL)、`pages/RewritePage.vue` |
+| `PruneBlockReason` | `constants/enums.py`、`analysis/predicates.py`、`analysis/sql_analyzer.py`、`models/query_log.py` | `constants/enums.ts`(BLOCKED_REASON_LABEL / BLOCKED_REASON_SHORT)、`pages/QueryCostPage.vue`、`pages/QueryDetailPage.vue`、`components/common/TableScanBreakdown.vue` |
+| `AntiPattern` | `constants/enums.py`、`analysis/rewriter.py`、`analysis/scoring.py` | `constants/enums.ts`(ANTI_PATTERN_LABEL)、`pages/RewritePage.vue`、`components/common/TableRewriteCompare.vue` |
 | `RiskLevel` | `constants/enums.py`、`analysis/scoring.py`、`models/rewrite_suggestion.py` | `constants/enums.ts`(RISK_LABEL)、`pages/RewritePage.vue` |
 | `RunStatus` / `SuggestionStatus` | `constants/enums.py`、`services/estimate_service.py`、`services/rewrite_service.py` | `constants/enums.ts`(RUN_STATUS_LABEL / SUGGESTION_STATUS_LABEL)、`pages/BudgetPage.vue` |
 | `BudgetStatus` | `constants/enums.py`、`services/estimate_service.py`、`services/budget_service.py` | `constants/enums.ts`(BUDGET_STATUS_LABEL)、`pages/BudgetPage.vue` |
@@ -150,6 +163,9 @@ uvicorn src.main:app --reload --port 19243
 
 # frontend（vite 代理 /api → localhost:19243）
 cd frontend && npm install && npm run dev   # http://localhost:18243
+
+# 算法核心离线回归（不需要数据库）
+cd backend && PYTHONPATH=. python3 -m unittest tests.test_multitable_analysis
 ```
 
 ## 12. 视觉方向

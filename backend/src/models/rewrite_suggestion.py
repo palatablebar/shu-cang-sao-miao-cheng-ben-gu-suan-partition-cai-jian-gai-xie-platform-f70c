@@ -26,6 +26,8 @@ class RewriteSuggestion(Base, TimestampMixin):
     score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     rewritten_sql: Mapped[str] = mapped_column(Text, nullable=False, default="")
     rationale: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # 逐表改写前后对照（扫描字节 / 命中分区 / 裁剪原因）；单表建议也有一行。
+    table_changes: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     reviewed_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

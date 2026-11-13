@@ -13,6 +13,7 @@ import ErrorNotice from '../components/common/ErrorNotice.vue'
 import MonoMetric from '../components/common/MonoMetric.vue'
 import PartitionRuler from '../components/common/PartitionRuler.vue'
 import StatusStamp from '../components/common/StatusStamp.vue'
+import TableScanBreakdown from '../components/common/TableScanBreakdown.vue'
 import { BLOCKED_REASON_LABEL } from '../constants/enums'
 import { cny, gibLabel, intLabel, pct, ratio } from '../utils/format'
 
@@ -23,25 +24,33 @@ const store = useQueryStore()
 const rewrites = useRewriteStore()
 const feedback = useFeedback()
 
-const partitions = ref<TablePartition[]>([])
+// 每张表一份分区明细（多表查询逐表画命中图）。
+const partitionsByTable = ref<Record<string, TablePartition[]>>({})
 const busy = ref(false)
 
 const detail = computed(() => store.detail)
 const id = computed(() => Number(route.params.id))
+const tables = computed(() => detail.value?.tables ?? [])
+const isMulti = computed(() => tables.value.length > 1)
 
 async function load() {
   const row = await store.loadDetail(id.value)
-  partitions.value = []
+  partitionsByTable.value = {}
   if (!row?.target_table) return
+  const names = (row.tables ?? []).map((table) => table.table_name)
+  if (!names.length) names.push(row.target_table)
   try {
-    const tables = await fetchTables()
-    const match = tables.find((table) => table.table_name === row.target_table)
-    if (match) {
-      const table = await fetchTable(match.id)
-      partitions.value = table.partitions
-    }
+    const catalog = await fetchTables()
+    await Promise.all(
+      names.map(async (name) => {
+        const match = catalog.find((table) => table.table_name === name)
+        if (!match) return
+        const table = await fetchTable(match.id)
+        partitionsByTable.value = { ...partitionsByTable.value, [name]: table.partitions }
+      }),
+    )
   } catch {
-    partitions.value = []
+    partitionsByTable.value = {}
   }
 }
 
@@ -77,6 +86,7 @@ watch(id, load)
         :level="detail.prunable ? 'prunable' : 'blocked'"
       />
       <span class="tag">目标表 {{ detail.target_table || '—' }}</span>
+      <span class="tag">扫描 {{ detail.table_count || 1 }} 张表</span>
       <span class="tag">分区键 {{ detail.total_partition_count }} 个</span>
       <span v-if="detail.has_star" class="tag tag--rust">SELECT *</span>
       <div class="spacer" />
@@ -90,7 +100,10 @@ watch(id, load)
         </BlueprintPanel>
 
         <BlueprintPanel label="分区谓词判定 / PARTITION PREDICATES">
-          <table v-if="detail.predicates.length" class="grid-table">
+          <p v-if="isMulti" class="hint" style="margin: 0 0 10px">
+            该查询同时扫描 {{ detail.table_count }} 张表，谓词已按表归属拆分；下面按表列出判定、命中分区与裁剪原因。
+          </p>
+          <table v-if="!isMulti && detail.predicates.length" class="grid-table">
             <thead>
               <tr>
                 <th>谓词</th>
@@ -114,7 +127,9 @@ watch(id, load)
               </tr>
             </tbody>
           </table>
-          <p v-else class="hint">该查询没有出现分区列谓词 —— 算法判定为「缺少分区谓词」，会扫描全部分区。</p>
+          <p v-else-if="!isMulti" class="hint">该查询没有出现分区列谓词 —— 算法判定为「缺少分区谓词」，会扫描全部分区。</p>
+
+          <TableScanBreakdown :tables="tables" :total-bytes="detail.scan_bytes" default-open />
         </BlueprintPanel>
 
         <BlueprintPanel label="算法结论 / RATIONALE">
@@ -138,6 +153,10 @@ watch(id, load)
           <div class="stack">
             <MonoMetric :value="gibLabel(detail.scan_bytes)" caption="本次扫描 / SCAN" />
             <div class="kv">
+              <div><dt>表级明细合计</dt><dd class="mono">{{ gibLabel(detail.table_scan_sum_bytes) }}</dd></div>
+              <div><dt>对账</dt><dd class="mono" :class="{ 'is-bad': detail.reconciliation && !detail.reconciliation.balanced }">
+                {{ detail.reconciliation ? (detail.reconciliation.balanced ? '一致' : `差额 ${gibLabel(Math.abs(detail.reconciliation.delta_bytes))}`) : '—' }}
+              </dd></div>
               <div><dt>整表原始字节</dt><dd class="mono">{{ gibLabel(detail.full_scan_bytes) }}</dd></div>
               <div><dt>命中分区</dt><dd class="mono">{{ intLabel(detail.hit_partition_count) }} / {{ intLabel(detail.total_partition_count) }}</dd></div>
               <div><dt>列裁剪比例</dt><dd class="mono">{{ ratio(detail.col_ratio, 3) }}</dd></div>
@@ -148,13 +167,24 @@ watch(id, load)
         </BlueprintPanel>
 
         <BlueprintPanel label="分区命中图 / PARTITION HITS">
-          <PartitionRuler
-            v-if="partitions.length"
-            :partitions="partitions"
-            :hit="detail.hit_partitions"
-            :prunable="detail.prunable"
-          />
-          <p v-else class="hint">未取到分区明细（表元数据缺失）。</p>
+          <div v-for="table in tables" :key="table.alias || table.table_name" class="hit-block">
+            <p class="mono hit-title">
+              {{ table.table_name }}
+              <span class="hint">
+                {{ table.hit_partition_count }}/{{ table.total_partition_count }} 分区 ·
+                {{ table.prunable ? '裁剪生效' : BLOCKED_REASON_LABEL[table.blocked_reason] || table.blocked_reason }}
+              </span>
+            </p>
+            <PartitionRuler
+              v-if="partitionsByTable[table.table_name]?.length"
+              :partitions="partitionsByTable[table.table_name]"
+              :hit="table.hit_partitions"
+              :prunable="table.prunable"
+              dense
+            />
+            <p v-else class="hint">未取到该表分区明细（元数据缺失）。</p>
+          </div>
+          <p v-if="!tables.length" class="hint">未取到分区明细（表元数据缺失）。</p>
           <p class="hint" style="margin: 8px 0 0">
             <span class="mono">■</span> 米白 = 命中分区 · <span class="mono">■</span> 深蓝 = 未命中（被裁剪）
           </p>
@@ -224,6 +254,21 @@ watch(id, load)
 .kv dd {
   margin: 0;
   font-size: 0.74rem;
+}
+.kv dd.is-bad {
+  color: var(--bad);
+}
+.hit-block + .hit-block {
+  margin-top: var(--space-4);
+}
+.hit-title {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin: 0 0 4px;
+  font-size: 0.7rem;
+  color: var(--cream-dim);
 }
 @media (max-width: 1080px) {
   .grid {
